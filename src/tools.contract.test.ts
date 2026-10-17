@@ -26,6 +26,11 @@ const EXPECTED_TOOL_NAMES = [
   "bing_ads_add_keywords",
   "bing_ads_add_negative_keywords",
   "bing_ads_add_responsive_search_ad",
+  "bing_ads_set_campaign_status",
+  "bing_ads_set_conversion_goal",
+  "bing_ads_set_ad_group_network",
+  "bing_ads_set_audience_network_bid",
+  "bing_ads_add_audience_criterion",
 ];
 
 describe("Bing Ads MCP tools contract", () => {

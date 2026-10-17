@@ -29,6 +29,14 @@ import {
   planFinalUrlSuffix,
   planLocations,
 } from "./typedWrites.js";
+import {
+  AUDIENCE_CRITERION_TYPES,
+  planAddAudienceCriterion,
+  planAdGroupNetwork,
+  planAudienceNetworkBid,
+  planCampaignStatus,
+  planConversionGoal,
+} from "./auditWrites.js";
 
 export interface ApiRequest {
   path: string;
@@ -46,6 +54,39 @@ interface TypedWriteDef {
 }
 
 const ALL_CAMPAIGN_TYPES = "Search,Shopping,Audience,PerformanceMax";
+// InStoreTransaction is left out on purpose: outside its pilot it fails the whole call.
+const GOAL_TYPES = "Url,Duration,PagesViewedPerVisit,Event,AppInstall,OfflineConversion";
+// Audience object type names (Custom, InMarket, Product), not the criterion type names.
+const AUDIENCE_TYPES = "RemarketingList,Custom,InMarket,Product,SimilarRemarketingList,CombinedList,CustomerList,ImpressionBasedRemarketingList";
+/** Audience.Type (object) -> criterion type used to read its associations. */
+const AUDIENCE_READ_TYPE: Record<string, string> = {
+  RemarketingList: "RemarketingList", CustomerList: "CustomerList", SimilarRemarketingList: "SimilarRemarketingList",
+  CombinedList: "CombinedList", ImpressionBasedRemarketingList: "ImpressionBasedRemarketingList",
+  Custom: "CustomAudience", InMarket: "InMarketAudience", Product: "ProductAudience",
+};
+
+function audienceTargetAndBid(settings: any[] | null | undefined): boolean | null {
+  for (const s of settings || []) {
+    if (s?.Type !== "TargetSetting") continue;
+    const d = (s.Details || []).find((x: any) => x?.CriterionTypeGroup === "Audience");
+    if (d) return d.TargetAndBid === true;
+  }
+  return null;
+}
+
+async function campaignAudienceCriterions(call: ApiCall, campaignId: string, type: string): Promise<any[]> {
+  const r = await call({ path: "/CampaignCriterions/QueryByIds", method: "POST", body: { CampaignId: Number(campaignId), CriterionType: type } });
+  return r?.CampaignCriterions || [];
+}
+
+async function adGroupAudienceCriterions(call: ApiCall, adGroupId: string, type: string): Promise<any[]> {
+  const r = await call({
+    path: "/AdGroupCriterions/QueryByIds",
+    method: "POST",
+    body: { AdGroupCriterionIds: null, AdGroupId: Number(adGroupId), CriterionType: type },
+  });
+  return r?.AdGroupCriterions || [];
+}
 
 async function campaignCriterions(call: ApiCall, campaignId: string, type: string): Promise<RawCampaignCriterion[]> {
   const r = await call({
@@ -174,6 +215,101 @@ export const TYPED_WRITES: Record<string, TypedWriteDef> = {
     }),
   },
 };
+
+Object.assign(TYPED_WRITES, {
+  bing_ads_set_campaign_status: {
+    async read(call: ApiCall, _args: any, accountId: string) {
+      const r = await call({ path: "/Campaigns/QueryByAccountId", method: "POST", body: { AccountId: Number(accountId), CampaignType: ALL_CAMPAIGN_TYPES } });
+      return r?.Campaigns || [];
+    },
+    plan: (state: any, args: any, accountId: string) => planCampaignStatus({ accountId, campaigns: state }, args),
+  },
+
+  bing_ads_set_conversion_goal: {
+    async read(call: ApiCall, args: any) {
+      const r = await call({
+        path: "/ConversionGoals/QueryByIds",
+        method: "POST",
+        body: { ConversionGoalIds: (args.goal_ids || []).map(Number), ConversionGoalTypes: GOAL_TYPES },
+      });
+      return r?.ConversionGoals || [];
+    },
+    plan: (state: any, args: any) => planConversionGoal(state, args),
+  },
+
+  bing_ads_set_ad_group_network: {
+    async read(call: ApiCall, args: any) {
+      const r = await call({ path: "/AdGroups/QueryByCampaignId", method: "POST", body: { CampaignId: Number(args.campaign_id) } });
+      return r?.AdGroups || [];
+    },
+    plan: (state: any, args: any) => planAdGroupNetwork(state, args),
+  },
+
+  bing_ads_set_audience_network_bid: {
+    async read(call: ApiCall, args: any, accountId: string) {
+      const r = await call({
+        path: "/Campaigns/QueryByIds",
+        method: "POST",
+        body: { AccountId: Number(accountId), CampaignIds: [Number(args.campaign_id)], CampaignType: ALL_CAMPAIGN_TYPES },
+      });
+      return r?.Campaigns || [];
+    },
+    plan: (state: any, args: any, accountId: string) => planAudienceNetworkBid({ accountId, campaigns: state }, args),
+  },
+
+  bing_ads_add_audience_criterion: {
+    async read(call: ApiCall, args: any, accountId: string) {
+      const aud = await call({ path: "/Audiences/QueryByIds", method: "POST", body: { AudienceIds: [Number(args.audience_id)], Type: AUDIENCE_TYPES } });
+      const audience = (aud?.Audiences || []).find((a: any) => a && String(a.Id) === String(Number(args.audience_id)));
+      if (!audience) throw new Error(`Audience not found in this account: ${args.audience_id}`);
+      const readType = AUDIENCE_READ_TYPE[audience.Type];
+      if (!readType) throw new Error(`Unsupported audience type: ${audience.Type}`);
+      const camps = await call({
+        path: "/Campaigns/QueryByIds",
+        method: "POST",
+        body: { AccountId: Number(accountId), CampaignIds: [Number(args.campaign_id)], CampaignType: ALL_CAMPAIGN_TYPES, ReturnAdditionalFields: "TargetSetting" },
+      });
+      const camp = (camps?.Campaigns || [])[0];
+      if (!camp) throw new Error(`Campaign not found: ${args.campaign_id}`);
+      const ags = await call({ path: "/AdGroups/QueryByCampaignId", method: "POST", body: { CampaignId: Number(args.campaign_id) } });
+      const adGroups = (ags?.AdGroups || []).map((a: any) => ({ Id: String(a.Id), Name: a.Name, audienceTargetAndBid: audienceTargetAndBid(a.Settings) }));
+      const isGroup = args.niveau === "ad_group";
+      const existing: Record<string, any[]> = {};
+      if (isGroup) {
+        for (const id of args.ad_group_ids || []) existing[String(Number(id))] = await adGroupAudienceCriterions(call, id, readType);
+      } else {
+        existing.campaign = await campaignAudienceCriterions(call, args.campaign_id, readType);
+      }
+      // Microsoft refuses biddable audiences at both levels of one campaign
+      // (CampaignAlreadyHasAdGroupAudienceCriterion): look for one at the other level.
+      const biddableAtOtherLevel: Array<{ entity: string; audience_id: string; type: string }> = [];
+      if (args.mode === "observation") {
+        if (isGroup) {
+          for (const type of AUDIENCE_CRITERION_TYPES) {
+            const found = (await campaignAudienceCriterions(call, args.campaign_id, type)).find((c: any) => String(c.Type).startsWith("Biddable"));
+            if (found) { biddableAtOtherLevel.push({ entity: camp.Name, audience_id: String(found.Criterion?.AudienceId), type }); break; }
+          }
+        } else {
+          scan: for (const ag of adGroups) {
+            for (const type of AUDIENCE_CRITERION_TYPES) {
+              const found = (await adGroupAudienceCriterions(call, ag.Id, type)).find((c: any) => String(c.Type).startsWith("Biddable"));
+              if (found) { biddableAtOtherLevel.push({ entity: ag.Name, audience_id: String(found.Criterion?.AudienceId), type }); break scan; }
+            }
+          }
+        }
+      }
+      return {
+        accountId,
+        audience: { Id: String(audience.Id), Name: audience.Name, Type: audience.Type },
+        campaign: { Id: String(camp.Id), Name: camp.Name, CampaignType: camp.CampaignType, audienceTargetAndBid: audienceTargetAndBid(camp.Settings) },
+        adGroups,
+        existing,
+        biddableAtOtherLevel,
+      };
+    },
+    plan: (state: any, args: any) => planAddAudienceCriterion(state, args),
+  },
+} as Record<string, TypedWriteDef>);
 
 export const TYPED_WRITE_TOOLS: ReadonlySet<string> = new Set(Object.keys(TYPED_WRITES));
 

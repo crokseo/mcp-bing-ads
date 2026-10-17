@@ -56,7 +56,8 @@ interface TypedWriteDef {
 const ALL_CAMPAIGN_TYPES = "Search,Shopping,Audience,PerformanceMax";
 // InStoreTransaction is left out on purpose: outside its pilot it fails the whole call.
 const GOAL_TYPES = "Url,Duration,PagesViewedPerVisit,Event,AppInstall,OfflineConversion";
-const AUDIENCE_TYPES = "RemarketingList,CustomAudience,InMarketAudience,ProductAudience,SimilarRemarketingList,CombinedList,CustomerList,ImpressionBasedRemarketingList";
+// Audience object type names (Custom, InMarket, Product), not the criterion type names.
+const AUDIENCE_TYPES = "RemarketingList,Custom,InMarket,Product,SimilarRemarketingList,CombinedList,CustomerList,ImpressionBasedRemarketingList";
 /** Audience.Type (object) -> criterion type used to read its associations. */
 const AUDIENCE_READ_TYPE: Record<string, string> = {
   RemarketingList: "RemarketingList", CustomerList: "CustomerList", SimilarRemarketingList: "SimilarRemarketingList",

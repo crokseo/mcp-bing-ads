@@ -15,6 +15,8 @@ const EXPECTED_TOOL_NAMES = [
   "bing_ads_add_shared_negatives",
   "bing_ads_update_campaign_budget",
   "bing_ads_update_ad_group_cpc_bid",
+  "bing_ads_campaign_query",
+  "bing_ads_run_report",
 ];
 
 describe("Bing Ads MCP tools contract", () => {

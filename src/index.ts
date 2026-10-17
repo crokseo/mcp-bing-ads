@@ -24,6 +24,8 @@ import {
   buildGetListItemsRequest,
   buildGetSharedEntityAssociationsRequests,
   mergeAssociationResponses,
+  buildCampaignQueryRequest,
+  buildReportRequest,
 } from "./readRequests.js";
 import {
   buildPauseKeywordsRequest,
@@ -282,7 +284,8 @@ class BingAdsManager {
     const url = `${CAMPAIGN_MGMT_BASE}/Campaigns/QueryByAccountId`;
     const body = {
       AccountId: client.account_id,
-      CampaignType: "Search",
+      // "Search" alone hides Audience, Shopping and Performance Max campaigns.
+      CampaignType: "Search,Shopping,Audience,PerformanceMax",
     };
     return await this.apiCall(url, body, client, "listCampaigns");
   }
@@ -635,6 +638,25 @@ class BingAdsManager {
   // WRITE OPERATIONS
   // ============================================
 
+  async campaignQuery(client: ClientConfig, path: string, body?: Record<string, unknown>): Promise<any> {
+    const req = buildCampaignQueryRequest(path, body);
+    return await this.apiCall(`${CAMPAIGN_MGMT_BASE}${req.path}`, req.body, client, "campaignQuery", req.method);
+  }
+
+  async runReport(client: ClientConfig, options: {
+    reportType: string;
+    columns: string[];
+    startDate: string;
+    endDate: string;
+    aggregation?: string;
+    campaignIds?: string[];
+    timeZone?: string;
+  }): Promise<any[]> {
+    const reportRequest = buildReportRequest({ accountId: client.account_id, ...options });
+    const requestId = await this.submitReport(client, reportRequest);
+    return await this.waitForReport(client, requestId);
+  }
+
   async pauseKeywords(client: ClientConfig, adGroupId: string, keywordIds: string[]): Promise<any> {
     const req = buildPauseKeywordsRequest(adGroupId, keywordIds);
     return await this.apiCall(`${CAMPAIGN_MGMT_BASE}${req.path}`, req.body, client, "pauseKeywords", req.method);
@@ -880,6 +902,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{
             type: "text",
             text: JSON.stringify(safeResponse(result, "searchTermReport"), null, 2),
+          }],
+        };
+      }
+
+      case "bing_ads_campaign_query": {
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.campaignQuery(
+          client,
+          args?.path as string,
+          args?.body as Record<string, unknown> | undefined,
+        );
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(safeResponse(result, "campaignQuery"), null, 2),
+          }],
+        };
+      }
+
+      case "bing_ads_run_report": {
+        const today_rr = new Date().toISOString().slice(0, 10);
+        if (args?.start_date && (args.start_date as string) > today_rr) {
+          return { content: [{ type: "text", text: JSON.stringify(safeResponse({ error: `start_date "${args.start_date}" is in the future. Reports only cover historical data.` }, "runReport"), null, 2) }] };
+        }
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.runReport(client, {
+          reportType: args?.report_type as string,
+          columns: args?.columns as string[],
+          startDate: args?.start_date as string,
+          endDate: args?.end_date as string,
+          aggregation: args?.aggregation as string | undefined,
+          campaignIds: args?.campaign_ids as string[] | undefined,
+          timeZone: args?.time_zone as string | undefined,
+        });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(safeResponse(result, "runReport"), null, 2),
           }],
         };
       }

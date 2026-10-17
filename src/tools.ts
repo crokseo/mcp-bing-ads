@@ -213,4 +213,37 @@ export const tools: Tool[] = [
       required: ["account_id", "campaign_id", "ad_group_id", "cpc_bid", "expected_current_bid"],
     },
   },
+  {
+    name: "bing_ads_campaign_query",
+    description: "Read any Campaign Management v13 resource through its REST query endpoint (read-only: the path must end in a segment starting with \"Query\"). Covers what the dedicated tools do not: ads (/Ads/QueryByAdGroupId with AdTypes [\"ResponsiveSearch\"]), targeting (/CampaignCriterions/QueryByIds with CampaignId and ONE CriterionType per call: Location, DayTime, Device, LocationIntent, Radius), ad group criterions incl. audiences (/AdGroupCriterions/QueryByIds), ad extensions (/AdExtensionIds/QueryByAccountId, /AdExtensions/QueryByIds, /AdExtensionsAssociations/QueryByEntityIds), keywords (/Keywords/QueryByAdGroupId), negative keywords (/NegativeKeywords/QueryByEntityIds), conversion goals (/ConversionGoals/QueryByIds), audiences (/Audiences/QueryByIds). Ids must be numbers in the body.",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        path: { type: "string", description: "Query endpoint relative to CampaignManagement/v13, e.g. \"/Ads/QueryByAdGroupId\"" },
+        body: { type: "object", description: "JSON request body, e.g. {\"AdGroupId\": 123, \"AdTypes\": [\"ResponsiveSearch\"]}" },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "bing_ads_run_report",
+    description: "Run any Reporting v13 report and return its rows. Use for what the dedicated report tools do not cover: AdPerformance, AssetPerformance, GeographicPerformance, AudiencePerformance, AgeGenderAudience, AdExtensionDetail, ShareOfVoice (impression share), ConversionPerformance, AccountPerformance, AdGroupPerformance, CampaignPerformance with extra columns. Defaults to Paris time (the dedicated report tools use Pacific time).",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        report_type: { type: "string", description: "Report type, e.g. \"AdPerformance\" or \"AdPerformanceReportRequest\"" },
+        columns: { type: "array", items: { type: "string" }, description: "Report columns, as named in the Reporting v13 docs for that report type" },
+        start_date: { type: "string", description: "Start date YYYY-MM-DD" },
+        end_date: { type: "string", description: "End date YYYY-MM-DD" },
+        aggregation: { type: "string", description: "Summary (default), Daily, Weekly, Monthly, Hourly, DayOfWeek..." },
+        campaign_ids: { type: "array", items: { type: "string" }, description: "Optional campaign scope" },
+        time_zone: { type: "string", description: "Report time zone (default BrusselsCopenhagenMadridParis)" },
+      },
+      required: ["report_type", "columns", "start_date", "end_date"],
+    },
+  },
 ];

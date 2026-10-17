@@ -80,5 +80,15 @@ describe("Resilience", () => {
       // 1 initial + 3 retries (maxAttempts: 3) = 4 total attempts.
       expect(attempts).toBe(4);
     });
+
+    it("does not retry when retryable is false (non-idempotent writes)", async () => {
+      let attempts = 0;
+      const fn = async () => {
+        attempts++;
+        throw new Error("Temporary failure");
+      };
+      await expect(withResilience(fn, "test-write-no-retry", false)).rejects.toThrow("Temporary failure");
+      expect(attempts).toBe(1);
+    });
   });
 });

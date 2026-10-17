@@ -6,7 +6,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { readFileSync, existsSync, createWriteStream } from "fs";
+import { readFileSync, existsSync, createWriteStream, mkdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { pipeline } from "stream/promises";
@@ -34,7 +34,8 @@ import {
   buildUpdateAdGroupCpcBidRequest,
   assertAdGroupBidPrecondition,
 } from "./mutationRequests.js";
-import { filterTools, assertWriteAllowed, isWriteEnabled } from "./writeGate.js";
+import { filterTools, assertWriteAllowed, isWriteEnabled, assertConfirmAllowed } from "./writeGate.js";
+import { TYPED_WRITE_TOOLS, runTypedWrite } from "./typedWriteRunner.js";
 import { withResilience, safeResponse, logger } from "./resilience.js";
 import { pollUntilReportReady, buildReportScope } from "./report.js";
 import { persistSecretToKeychain } from "./keychain.js";
@@ -243,7 +244,7 @@ class BingAdsManager {
     };
   }
 
-  private async apiCall(url: string, body: any, client: ClientConfig, operationName: string = "apiCall", method: string = "POST"): Promise<any> {
+  private async apiCall(url: string, body: any, client: ClientConfig, operationName: string = "apiCall", method: string = "POST", retryable: boolean = true): Promise<any> {
     return withResilience(async () => {
       const token = await this.getAccessToken();
       const headers = this.getHeaders(client);
@@ -264,7 +265,7 @@ class BingAdsManager {
       }
 
       return await resp.json();
-    }, operationName);
+    }, operationName, retryable);
   }
 
   private getClientForAccountId(accountId: string): ClientConfig | null {
@@ -643,6 +644,13 @@ class BingAdsManager {
     return await this.apiCall(`${CAMPAIGN_MGMT_BASE}${req.path}`, req.body, client, "campaignQuery", req.method);
   }
 
+  /** Raw Campaign Management call for the typed write tools (reads and writes). */
+  async campaignRequest(client: ClientConfig, req: { path: string; method: string; body: Record<string, unknown> }, operationName: string): Promise<any> {
+    // Reads are query endpoints and safe to retry; mutations are not.
+    const isRead = req.method === "POST" && /\/Query[A-Za-z]*$/.test(req.path);
+    return await this.apiCall(`${CAMPAIGN_MGMT_BASE}${req.path}`, req.body, client, operationName, req.method, isRead);
+  }
+
   async runReport(client: ClientConfig, options: {
     reportType: string;
     columns: string[];
@@ -790,6 +798,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (clients.length === 0) throw new Error("No clients configured");
       return clients[0];
     };
+
+    if (TYPED_WRITE_TOOLS.has(name)) {
+      assertConfirmAllowed(name, args?.confirm);
+      const client = resolveClient(args?.account_id as string);
+      const result = await runTypedWrite(name, (args ?? {}) as Record<string, any>, {
+        call: (req) => adsManager.campaignRequest(client, req, name),
+        accountId: client.account_id,
+        writeEnabled: isWriteEnabled(),
+        fileExists: existsSync,
+        writeFile: (path, content) => {
+          mkdirSync(dirname(path), { recursive: true });
+          // "wx" fails if the file appeared since the existence check.
+          writeFileSync(path, content, { encoding: "utf-8", flag: "wx" });
+        },
+        now: () => new Date(),
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(safeResponse(result, name), null, 2) }],
+        ...(result.error ? { isError: true } : {}),
+      };
+    }
 
     switch (name) {
       case "bing_ads_get_client_context": {

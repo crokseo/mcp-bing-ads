@@ -120,3 +120,87 @@ export function mergeAssociationResponses(
   }
   return errors.length ? { Associations: associations, Errors: errors } : { Associations: associations };
 }
+
+/**
+ * Generic Campaign Management read. The REST API exposes every Get* operation
+ * as `POST /<Resource>/Query...` (GetAdsByAdGroupId → /Ads/QueryByAdGroupId,
+ * GetCampaignCriterionsByIds → /CampaignCriterions/QueryByIds). Writes use
+ * other shapes (POST /<Resource> to add, PUT to update, DELETE to remove), so
+ * requiring the last segment to start with "Query" keeps this tool read-only
+ * without enumerating every read operation.
+ */
+const QUERY_PATH = /^(\/[A-Z][A-Za-z]*)+\/Query[A-Za-z]*$/;
+
+export function buildCampaignQueryRequest(path: string, body: Record<string, unknown> = {}): ReadRequest {
+  if (!QUERY_PATH.test(path)) {
+    throw new Error(
+      `path must be a Campaign Management query such as "/Ads/QueryByAdGroupId" (last segment starting with "Query"), got "${path}"`,
+    );
+  }
+  return { path, method: "POST", body };
+}
+
+export interface ReportOptions {
+  accountId: string;
+  /** "AdPerformance" or "AdPerformanceReportRequest". */
+  reportType: string;
+  columns: string[];
+  startDate: string;
+  endDate: string;
+  aggregation?: string;
+  campaignIds?: string[];
+  /**
+   * The existing report tools hardcode Pacific time, which shifts a French
+   * account's days by 9 hours. Default to the Paris zone instead.
+   */
+  timeZone?: string;
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function toReportDate(date: string, label: string): { Year: number; Month: number; Day: number } {
+  if (!ISO_DATE.test(date)) {
+    throw new Error(`${label} must be YYYY-MM-DD, got "${date}"`);
+  }
+  const [Year, Month, Day] = date.split("-").map(Number);
+  return { Year, Month, Day };
+}
+
+/** ReportRequest body for any Reporting v13 report type. */
+export function buildReportRequest(options: ReportOptions): Record<string, unknown> {
+  const base = options.reportType.replace(/ReportRequest$/, "");
+  if (!/^[A-Z][A-Za-z]+$/.test(base)) {
+    throw new Error(`report_type must look like "AdPerformance", got "${options.reportType}"`);
+  }
+  if (!options.columns || options.columns.length === 0) {
+    throw new Error("columns must contain at least one column");
+  }
+  const accountId = toNumericId(options.accountId, "account_id");
+  const scope: Record<string, unknown> = { AccountIds: [accountId] };
+  if (options.campaignIds && options.campaignIds.length > 0) {
+    scope.Campaigns = options.campaignIds.map(id => ({
+      AccountId: accountId,
+      CampaignId: toNumericId(id, "campaign_ids"),
+    }));
+    // Bing ignores Scope.Campaigns when AccountIds is also set (see index.ts).
+    delete scope.AccountIds;
+  }
+  return {
+    Type: `${base}ReportRequest`,
+    ReportName: base,
+    Format: "Csv",
+    FormatVersion: "2.0",
+    ExcludeColumnHeaders: false,
+    ExcludeReportFooter: true,
+    ExcludeReportHeader: true,
+    ReturnOnlyCompleteData: false,
+    Aggregation: options.aggregation || "Summary",
+    Columns: options.columns,
+    Scope: scope,
+    Time: {
+      CustomDateRangeStart: toReportDate(options.startDate, "start_date"),
+      CustomDateRangeEnd: toReportDate(options.endDate, "end_date"),
+      ReportTimeZone: options.timeZone || "BrusselsCopenhagenMadridParis",
+    },
+  };
+}

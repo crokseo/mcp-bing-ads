@@ -66,7 +66,28 @@ function truncateArraysRecursively(obj: any, depth: number = 0): boolean {
   return truncated;
 }
 
-export function safeResponse<T>(data: T, context: string): T {
+export interface TruncatedRows {
+  truncated: true;
+  total_rows: number;
+  returned_rows: number;
+  warning: string;
+  rows: unknown[];
+}
+
+export function safeResponse<T>(data: T, context: string): T | TruncatedRows {
+  // A bare array (report rows) has nowhere to carry a `truncated` flag, so
+  // halving it used to return a shorter list that looked complete: a 90-day
+  // search term report came back with 346 of 2,753 rows. Wrap it instead.
+  if (Array.isArray(data) && Buffer.byteLength(JSON.stringify(data), "utf-8") > MAX_RESPONSE_SIZE) {
+    const wrapped = safeResponse({ rows: data as unknown[] }, context) as { rows: unknown[] };
+    return {
+      truncated: true,
+      total_rows: data.length,
+      returned_rows: wrapped.rows.length,
+      warning: `Response over ${MAX_RESPONSE_SIZE} bytes: only ${wrapped.rows.length} of ${data.length} rows returned. Split the date range or narrow the columns to get every row.`,
+      rows: wrapped.rows,
+    };
+  }
   let current = data;
   for (let pass = 0; pass < 10; pass++) {
     const jsonStr = JSON.stringify(current);
@@ -125,30 +146,37 @@ const timeoutPolicy = timeout(30_000, TimeoutStrategy.Aggressive);
 // doesn't block all operations. Map<operationName, policy>
 const policyCache = new Map<string, any>();
 
-function getPolicyForOperation(operationName: string) {
-  if (!policyCache.has(operationName)) {
+function getPolicyForOperation(operationName: string, retryable: boolean = true) {
+  const key = retryable ? operationName : `${operationName}:no-retry`;
+  if (!policyCache.has(key)) {
     const breaker = circuitBreaker(isTransient, {
       halfOpenAfter: 60_000, // 60s to attempt recovery
       breaker: new ConsecutiveBreaker(5), // Open after 5 consecutive failures
     });
-    const policy = wrap(timeoutPolicy, breaker, retryPolicy);
-    policyCache.set(operationName, policy);
+    const policy = retryable ? wrap(timeoutPolicy, breaker, retryPolicy) : wrap(timeoutPolicy, breaker);
+    policyCache.set(key, policy);
   }
-  return policyCache.get(operationName);
+  return policyCache.get(key);
 }
 
 // ============================================
 // WRAPPED API CALL WITH LOGGING
 // ============================================
 
+/**
+ * `retryable: false` is for non-idempotent writes: a timeout or 5xx can come
+ * back after the server applied the change, and retrying an add would then
+ * create it twice.
+ */
 export async function withResilience<T>(
   fn: () => Promise<T>,
-  operationName: string
+  operationName: string,
+  retryable: boolean = true,
 ): Promise<T> {
   try {
     logger.debug({ operation: operationName }, "Starting API call");
 
-    const policy = getPolicyForOperation(operationName);
+    const policy = getPolicyForOperation(operationName, retryable);
     const result = await policy.execute(() => fn());
 
     logger.debug({ operation: operationName }, "API call succeeded");

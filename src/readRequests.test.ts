@@ -5,6 +5,8 @@ import {
   buildGetSharedEntityAssociationsRequest,
   buildGetSharedEntityAssociationsRequests,
   mergeAssociationResponses,
+  buildCampaignQueryRequest,
+  buildReportRequest,
 } from "./readRequests.js";
 
 describe("buildGetListItemsRequest", () => {
@@ -115,5 +117,72 @@ describe("mergeAssociationResponses", () => {
     ]);
     expect(merged.Associations).toHaveLength(1);
     expect(merged.Errors).toHaveLength(1);
+  });
+});
+
+describe("buildCampaignQueryRequest", () => {
+  it("accepts a query path and passes the body through", () => {
+    const req = buildCampaignQueryRequest("/Ads/QueryByAdGroupId", { AdGroupId: 1 });
+    expect(req).toEqual({ path: "/Ads/QueryByAdGroupId", method: "POST", body: { AdGroupId: 1 } });
+  });
+
+  it("accepts nested query resources", () => {
+    expect(buildCampaignQueryRequest("/ListItems/QueryBySharedList").path).toBe("/ListItems/QueryBySharedList");
+  });
+
+  it.each([
+    ["/Ads", "add endpoint"],
+    ["/Campaigns", "update endpoint"],
+    ["/Keywords/Delete", "non-query segment"],
+    ["Ads/QueryByAdGroupId", "missing leading slash"],
+    ["/Ads/QueryByAdGroupId?x=1", "query string"],
+    ["/../Ads/QueryByAdGroupId", "path traversal"],
+    ["https://evil.example/Ads/QueryByAdGroupId", "absolute url"],
+  ])("rejects %s (%s) — the tool must stay read-only", (path) => {
+    expect(() => buildCampaignQueryRequest(path)).toThrow(/Query/);
+  });
+});
+
+describe("buildReportRequest", () => {
+  const base = {
+    accountId: "111111111",
+    reportType: "AdPerformance",
+    columns: ["AdId", "Impressions"],
+    startDate: "2026-09-01",
+    endDate: "2026-09-30",
+  };
+
+  it("builds a summary report scoped to the account, in Paris time by default", () => {
+    const req = buildReportRequest(base);
+    expect(req.Type).toBe("AdPerformanceReportRequest");
+    expect(req.Aggregation).toBe("Summary");
+    expect(req.Scope).toEqual({ AccountIds: [111111111] });
+    expect(req.Time).toEqual({
+      CustomDateRangeStart: { Year: 2026, Month: 9, Day: 1 },
+      CustomDateRangeEnd: { Year: 2026, Month: 9, Day: 30 },
+      ReportTimeZone: "BrusselsCopenhagenMadridParis",
+    });
+  });
+
+  it("accepts the full request type name", () => {
+    expect(buildReportRequest({ ...base, reportType: "GeographicPerformanceReportRequest" }).Type)
+      .toBe("GeographicPerformanceReportRequest");
+  });
+
+  it("scopes to campaigns with numeric ids", () => {
+    const req = buildReportRequest({ ...base, campaignIds: ["222222222"] });
+    expect(req.Scope).toEqual({ Campaigns: [{ AccountId: 111111111, CampaignId: 222222222 }] });
+  });
+
+  it("honours aggregation and time zone overrides", () => {
+    const req = buildReportRequest({ ...base, aggregation: "Daily", timeZone: "GreenwichMeanTimeDublinEdinburghLisbonLondon" });
+    expect(req.Aggregation).toBe("Daily");
+    expect((req.Time as any).ReportTimeZone).toBe("GreenwichMeanTimeDublinEdinburghLisbonLondon");
+  });
+
+  it("rejects malformed input before it reaches the API", () => {
+    expect(() => buildReportRequest({ ...base, columns: [] })).toThrow(/columns/);
+    expect(() => buildReportRequest({ ...base, startDate: "01/09/2026" })).toThrow(/start_date/);
+    expect(() => buildReportRequest({ ...base, reportType: "ad performance" })).toThrow(/report_type/);
   });
 });

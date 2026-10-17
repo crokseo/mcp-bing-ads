@@ -7,7 +7,10 @@ import {
   filterTools,
   assertWriteAllowed,
   WRITE_DISABLED_MESSAGE,
+  DRY_RUN_THEN_WRITE_TOOLS,
+  assertConfirmAllowed,
 } from "./writeGate.js";
+import { TYPED_WRITE_TOOLS } from "./typedWriteRunner.js";
 
 const READ_TOOLS = [
   "bing_ads_get_client_context",
@@ -19,13 +22,15 @@ const READ_TOOLS = [
   "bing_ads_list_shared_entities",
   "bing_ads_get_shared_list_items",
   "bing_ads_get_shared_entity_associations",
+  "bing_ads_campaign_query",
+  "bing_ads_run_report",
 ];
 
 describe("writeGate", () => {
   describe("tool classification covers every registered tool", () => {
     it("every tool is either in WRITE_TOOLS or in the READ_TOOLS fixture", () => {
       const registered = tools.map((t) => t.name);
-      const classified = new Set<string>([...WRITE_TOOLS, ...READ_TOOLS]);
+      const classified = new Set<string>([...WRITE_TOOLS, ...READ_TOOLS, ...DRY_RUN_THEN_WRITE_TOOLS]);
       const uncovered = registered.filter((n) => !classified.has(n));
       expect(uncovered).toEqual([]);
     });
@@ -134,6 +139,45 @@ describe("writeGate", () => {
 
   it("WRITE_DISABLED_MESSAGE mentions the env var", () => {
     expect(WRITE_DISABLED_MESSAGE).toContain("BING_ADS_MCP_WRITE=true");
+  });
+
+  describe("dry-run-then-write tools", () => {
+    it("are disjoint from WRITE_TOOLS and READ_TOOLS", () => {
+      for (const n of DRY_RUN_THEN_WRITE_TOOLS) {
+        expect(WRITE_TOOLS.has(n)).toBe(false);
+        expect(READ_TOOLS).not.toContain(n);
+      }
+    });
+
+    it("match exactly the tools the typed write runner implements", () => {
+      expect([...DRY_RUN_THEN_WRITE_TOOLS].sort()).toEqual([...TYPED_WRITE_TOOLS].sort());
+    });
+
+    it("stay listed when writes are disabled, so the dry run is reachable", () => {
+      const names = filterTools(tools, {}).map((t) => t.name);
+      for (const n of DRY_RUN_THEN_WRITE_TOOLS) expect(names).toContain(n);
+    });
+
+    it("pass assertWriteAllowed (the confirm check is separate)", () => {
+      for (const n of DRY_RUN_THEN_WRITE_TOOLS) expect(() => assertWriteAllowed(n, {})).not.toThrow();
+    });
+
+    it("refuse confirm=true when writes are disabled", () => {
+      expect(() => assertConfirmAllowed("bing_ads_set_ad_schedule", true, {})).toThrow(/BING_ADS_MCP_WRITE/);
+    });
+
+    it("allow confirm=true when writes are enabled", () => {
+      expect(() => assertConfirmAllowed("bing_ads_set_ad_schedule", true, { BING_ADS_MCP_WRITE: "true" })).not.toThrow();
+    });
+
+    it("always allow the dry run", () => {
+      expect(() => assertConfirmAllowed("bing_ads_set_ad_schedule", false, {})).not.toThrow();
+      expect(() => assertConfirmAllowed("bing_ads_set_ad_schedule", undefined, {})).not.toThrow();
+    });
+
+    it("leave the existing write tools under the regular gate", () => {
+      for (const n of WRITE_TOOLS) expect(() => assertWriteAllowed(n, {})).toThrow();
+    });
   });
 });
 

@@ -6,7 +6,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { readFileSync, existsSync, createWriteStream } from "fs";
+import { readFileSync, existsSync, createWriteStream, mkdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { pipeline } from "stream/promises";
@@ -24,6 +24,8 @@ import {
   buildGetListItemsRequest,
   buildGetSharedEntityAssociationsRequests,
   mergeAssociationResponses,
+  buildCampaignQueryRequest,
+  buildReportRequest,
 } from "./readRequests.js";
 import {
   buildPauseKeywordsRequest,
@@ -32,7 +34,8 @@ import {
   buildUpdateAdGroupCpcBidRequest,
   assertAdGroupBidPrecondition,
 } from "./mutationRequests.js";
-import { filterTools, assertWriteAllowed, isWriteEnabled } from "./writeGate.js";
+import { filterTools, assertWriteAllowed, isWriteEnabled, assertConfirmAllowed } from "./writeGate.js";
+import { TYPED_WRITE_TOOLS, runTypedWrite } from "./typedWriteRunner.js";
 import { withResilience, safeResponse, logger } from "./resilience.js";
 import { pollUntilReportReady, buildReportScope } from "./report.js";
 import { persistSecretToKeychain } from "./keychain.js";
@@ -241,7 +244,7 @@ class BingAdsManager {
     };
   }
 
-  private async apiCall(url: string, body: any, client: ClientConfig, operationName: string = "apiCall", method: string = "POST"): Promise<any> {
+  private async apiCall(url: string, body: any, client: ClientConfig, operationName: string = "apiCall", method: string = "POST", retryable: boolean = true): Promise<any> {
     return withResilience(async () => {
       const token = await this.getAccessToken();
       const headers = this.getHeaders(client);
@@ -262,7 +265,7 @@ class BingAdsManager {
       }
 
       return await resp.json();
-    }, operationName);
+    }, operationName, retryable);
   }
 
   private getClientForAccountId(accountId: string): ClientConfig | null {
@@ -282,7 +285,8 @@ class BingAdsManager {
     const url = `${CAMPAIGN_MGMT_BASE}/Campaigns/QueryByAccountId`;
     const body = {
       AccountId: client.account_id,
-      CampaignType: "Search",
+      // "Search" alone hides Audience, Shopping and Performance Max campaigns.
+      CampaignType: "Search,Shopping,Audience,PerformanceMax",
     };
     return await this.apiCall(url, body, client, "listCampaigns");
   }
@@ -635,6 +639,32 @@ class BingAdsManager {
   // WRITE OPERATIONS
   // ============================================
 
+  async campaignQuery(client: ClientConfig, path: string, body?: Record<string, unknown>): Promise<any> {
+    const req = buildCampaignQueryRequest(path, body);
+    return await this.apiCall(`${CAMPAIGN_MGMT_BASE}${req.path}`, req.body, client, "campaignQuery", req.method);
+  }
+
+  /** Raw Campaign Management call for the typed write tools (reads and writes). */
+  async campaignRequest(client: ClientConfig, req: { path: string; method: string; body: Record<string, unknown> }, operationName: string): Promise<any> {
+    // Reads are query endpoints and safe to retry; mutations are not.
+    const isRead = req.method === "POST" && /\/Query[A-Za-z]*$/.test(req.path);
+    return await this.apiCall(`${CAMPAIGN_MGMT_BASE}${req.path}`, req.body, client, operationName, req.method, isRead);
+  }
+
+  async runReport(client: ClientConfig, options: {
+    reportType: string;
+    columns: string[];
+    startDate: string;
+    endDate: string;
+    aggregation?: string;
+    campaignIds?: string[];
+    timeZone?: string;
+  }): Promise<any[]> {
+    const reportRequest = buildReportRequest({ accountId: client.account_id, ...options });
+    const requestId = await this.submitReport(client, reportRequest);
+    return await this.waitForReport(client, requestId);
+  }
+
   async pauseKeywords(client: ClientConfig, adGroupId: string, keywordIds: string[]): Promise<any> {
     const req = buildPauseKeywordsRequest(adGroupId, keywordIds);
     return await this.apiCall(`${CAMPAIGN_MGMT_BASE}${req.path}`, req.body, client, "pauseKeywords", req.method);
@@ -769,6 +799,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return clients[0];
     };
 
+    if (TYPED_WRITE_TOOLS.has(name)) {
+      assertConfirmAllowed(name, args?.confirm);
+      const client = resolveClient(args?.account_id as string);
+      const result = await runTypedWrite(name, (args ?? {}) as Record<string, any>, {
+        call: (req) => adsManager.campaignRequest(client, req, name),
+        accountId: client.account_id,
+        writeEnabled: isWriteEnabled(),
+        fileExists: existsSync,
+        writeFile: (path, content) => {
+          mkdirSync(dirname(path), { recursive: true });
+          // "wx" fails if the file appeared since the existence check.
+          writeFileSync(path, content, { encoding: "utf-8", flag: "wx" });
+        },
+        now: () => new Date(),
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(safeResponse(result, name), null, 2) }],
+        ...(result.error ? { isError: true } : {}),
+      };
+    }
+
     switch (name) {
       case "bing_ads_get_client_context": {
         const cwd = args?.working_directory as string;
@@ -880,6 +931,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{
             type: "text",
             text: JSON.stringify(safeResponse(result, "searchTermReport"), null, 2),
+          }],
+        };
+      }
+
+      case "bing_ads_campaign_query": {
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.campaignQuery(
+          client,
+          args?.path as string,
+          args?.body as Record<string, unknown> | undefined,
+        );
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(safeResponse(result, "campaignQuery"), null, 2),
+          }],
+        };
+      }
+
+      case "bing_ads_run_report": {
+        const today_rr = new Date().toISOString().slice(0, 10);
+        if (args?.start_date && (args.start_date as string) > today_rr) {
+          return { content: [{ type: "text", text: JSON.stringify(safeResponse({ error: `start_date "${args.start_date}" is in the future. Reports only cover historical data.` }, "runReport"), null, 2) }] };
+        }
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.runReport(client, {
+          reportType: args?.report_type as string,
+          columns: args?.columns as string[],
+          startDate: args?.start_date as string,
+          endDate: args?.end_date as string,
+          aggregation: args?.aggregation as string | undefined,
+          campaignIds: args?.campaign_ids as string[] | undefined,
+          timeZone: args?.time_zone as string | undefined,
+        });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(safeResponse(result, "runReport"), null, 2),
           }],
         };
       }

@@ -182,6 +182,8 @@ export function buildReportRequest(options: ReportOptions): Record<string, unkno
       AccountId: accountId,
       CampaignId: toNumericId(id, "campaign_ids"),
     }));
+    // Bing ignores Scope.Campaigns when AccountIds is also set (see index.ts).
+    delete scope.AccountIds;
   }
   return {
     Type: `${base}ReportRequest`,

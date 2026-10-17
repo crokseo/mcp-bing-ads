@@ -171,7 +171,7 @@ describe("buildReportRequest", () => {
 
   it("scopes to campaigns with numeric ids", () => {
     const req = buildReportRequest({ ...base, campaignIds: ["222222222"] });
-    expect((req.Scope as any).Campaigns).toEqual([{ AccountId: 111111111, CampaignId: 222222222 }]);
+    expect(req.Scope).toEqual({ Campaigns: [{ AccountId: 111111111, CampaignId: 222222222 }] });
   });
 
   it("honours aggregation and time zone overrides", () => {

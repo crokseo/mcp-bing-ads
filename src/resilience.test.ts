@@ -15,12 +15,21 @@ describe("Resilience", () => {
         name: `item-${i}`,
         description: "x".repeat(100),
       }));
-      const result = safeResponse(largeArray, "test");
-      expect(Array.isArray(result)).toBe(true);
-      // After halving passes the array must be strictly smaller than half the input
-      // (at least one halving pass), and must retain at least 1 element.
-      expect((result as any[]).length).toBeGreaterThanOrEqual(1);
-      expect((result as any[]).length).toBeLessThanOrEqual(largeArray.length / 2);
+      const result = safeResponse(largeArray, "test") as any;
+      // A truncated bare array must say so: a shorter list that looks complete
+      // silently corrupts every total computed from it.
+      expect(result.truncated).toBe(true);
+      expect(result.total_rows).toBe(largeArray.length);
+      expect(result.returned_rows).toBe(result.rows.length);
+      expect(result.rows.length).toBeGreaterThanOrEqual(1);
+      expect(result.rows.length).toBeLessThanOrEqual(largeArray.length / 2);
+      expect(result.warning).toMatch(/Split the date range/);
+      expect(Buffer.byteLength(JSON.stringify(result), "utf-8")).toBeLessThanOrEqual(200_000);
+    });
+
+    it("returns a small array unchanged", () => {
+      const rows = [{ a: 1 }, { a: 2 }];
+      expect(safeResponse(rows, "test")).toEqual(rows);
     });
 
     it("should truncate large objects with items array", () => {

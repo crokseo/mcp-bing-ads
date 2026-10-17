@@ -66,7 +66,28 @@ function truncateArraysRecursively(obj: any, depth: number = 0): boolean {
   return truncated;
 }
 
-export function safeResponse<T>(data: T, context: string): T {
+export interface TruncatedRows {
+  truncated: true;
+  total_rows: number;
+  returned_rows: number;
+  warning: string;
+  rows: unknown[];
+}
+
+export function safeResponse<T>(data: T, context: string): T | TruncatedRows {
+  // A bare array (report rows) has nowhere to carry a `truncated` flag, so
+  // halving it used to return a shorter list that looked complete: a 90-day
+  // search term report came back with 346 of 2,753 rows. Wrap it instead.
+  if (Array.isArray(data) && Buffer.byteLength(JSON.stringify(data), "utf-8") > MAX_RESPONSE_SIZE) {
+    const wrapped = safeResponse({ rows: data as unknown[] }, context) as { rows: unknown[] };
+    return {
+      truncated: true,
+      total_rows: data.length,
+      returned_rows: wrapped.rows.length,
+      warning: `Response over ${MAX_RESPONSE_SIZE} bytes: only ${wrapped.rows.length} of ${data.length} rows returned. Split the date range or narrow the columns to get every row.`,
+      rows: wrapped.rows,
+    };
+  }
   let current = data;
   for (let pass = 0; pass < 10; pass++) {
     const jsonStr = JSON.stringify(current);

@@ -301,7 +301,7 @@ Object.assign(TYPED_WRITES, {
       return {
         accountId,
         audience: { Id: String(audience.Id), Name: audience.Name, Type: audience.Type },
-        campaign: { Id: String(camp.Id), Name: camp.Name, audienceTargetAndBid: audienceTargetAndBid(camp.Settings) },
+        campaign: { Id: String(camp.Id), Name: camp.Name, CampaignType: camp.CampaignType, audienceTargetAndBid: audienceTargetAndBid(camp.Settings) },
         adGroups,
         existing,
         biddableAtOtherLevel,

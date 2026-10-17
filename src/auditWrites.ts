@@ -288,7 +288,11 @@ export function planAudienceNetworkBid(
     warnings.push("The current adjustment is unset (system default, 0 today): restore sets it to 0 explicitly.");
   }
   const cur = current ?? 0;
-  if (a === -100) warnings.push(`At -100 the campaign stops serving on the Microsoft Audience Network (native/display placements); search placements are unchanged.`);
+  // Probed live 2026-10-17: PUT returns 200 with no error but the value stays 0, at campaign and
+  // ad group level. Microsoft retired the audience ads bid modifier for Search in February 2023.
+  if (a !== cur) {
+    throw new Error("Microsoft ignores AudienceAdsBidAdjustment on Search campaigns since February 2023: the update is accepted and not applied. Check the Audience Network setting in the Microsoft Ads interface instead.");
+  }
   const changed = current !== a;
   return {
     before: { id, name: c.Name, audience_ads_bid_adjustment: current ?? null },
@@ -323,7 +327,7 @@ export interface RawAudienceCriterion {
 export interface AudienceAttachState {
   accountId: string;
   audience: { Id: string; Name: string; Type: string };
-  campaign: { Id: string; Name: string; audienceTargetAndBid: boolean | null };
+  campaign: { Id: string; Name: string; CampaignType?: string; audienceTargetAndBid: boolean | null };
   /** Ad groups of the campaign with their own audience TargetSetting, if any. */
   adGroups: Array<{ Id: string; Name: string; audienceTargetAndBid: boolean | null }>;
   /** Existing associations of this audience, by entity id ("campaign" key for campaign level). */
@@ -375,6 +379,10 @@ export function planAddAudienceCriterion(
     }));
   } else {
     if (args.ad_group_ids && args.ad_group_ids.length) throw new Error("ad_group_ids only applies when niveau is ad_group");
+    // Probed live 2026-10-17: AIMCampaignLevelAudienceTargetingNotEnabled on an Audience campaign.
+    if (state.campaign.CampaignType === "Audience") {
+      throw new Error(`"${state.campaign.Name}" is an Audience campaign: Microsoft refuses campaign-level audience associations there. Use niveau: "ad_group".`);
+    }
     targets = [{ id: String(campaignId), name: state.campaign.Name, targetAndBid: state.campaign.audienceTargetAndBid }];
   }
 

@@ -110,11 +110,13 @@ describe("planAudienceNetworkBid", () => {
     { Id: "42", Name: "Display", CampaignType: "Audience", AudienceAdsBidAdjustment: null },
   ];
 
-  it("excludes the Audience Network at -100 and restores the previous value", () => {
-    const plan = planAudienceNetworkBid({ accountId: ACCOUNT, campaigns }, { campaign_id: "41", ajustement: -100 });
-    expect(plan.requests).toEqual([{ path: "/Campaigns", method: "PUT", body: { AccountId: 111111111, Campaigns: [{ Id: 41, AudienceAdsBidAdjustment: -100 }] } }]);
-    expect(plan.restore_args).toEqual([{ campaign_id: "41", ajustement: 0 }]);
-    expect(plan.warnings.join(" ")).toMatch(/Audience Network/);
+  it("refuses any change: Microsoft accepts the update and does not apply it", () => {
+    expect(() => planAudienceNetworkBid({ accountId: ACCOUNT, campaigns }, { campaign_id: "41", ajustement: -100 })).toThrow(/February 2023/);
+  });
+
+  it("is a no-op when the value already matches", () => {
+    const plan = planAudienceNetworkBid({ accountId: ACCOUNT, campaigns }, { campaign_id: "41", ajustement: 0 });
+    expect(plan.requests).toEqual([]);
   });
 
   it("refuses non-Search campaigns and out-of-range values", () => {
@@ -159,6 +161,11 @@ describe("planAddAudienceCriterion", () => {
     const args = { niveau: "ad_group", campaign_id: "1", ad_group_ids: ["62"], audience_id: "51", mode: "observation" };
     expect(() => planAddAudienceCriterion(base(), args)).toThrow(/Targeting mode/);
     expect(planAddAudienceCriterion(base(), { ...args, autoriser_ciblage: true }).requests).toHaveLength(1);
+  });
+
+  it("refuses campaign-level associations on an Audience campaign (ad group level only)", () => {
+    const st = base({ campaign: { Id: "1", Name: "Display", CampaignType: "Audience", audienceTargetAndBid: true } });
+    expect(() => planAddAudienceCriterion(st, { niveau: "campaign", campaign_id: "1", audience_id: "51", mode: "exclusion" })).toThrow(/ad_group/);
   });
 
   it("allows an exclusion even in Targeting mode, at campaign level", () => {

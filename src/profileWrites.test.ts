@@ -31,7 +31,7 @@ describe("planProfileBid", () => {
       {
         path: "/CampaignCriterions", method: "PUT",
         body: {
-          CriterionType: "Industry",
+          CriterionType: "Targets",
           CampaignCriterions: [{
             Id: 71, Type: "BiddableCampaignCriterion", CampaignId: 1,
             Criterion: { Type: "ProfileCriterion", ProfileId: 501, ProfileType: "Industry" },
@@ -42,7 +42,7 @@ describe("planProfileBid", () => {
       {
         path: "/CampaignCriterions", method: "PUT",
         body: {
-          CriterionType: "JobFunction",
+          CriterionType: "Targets",
           CampaignCriterions: [{
             Id: 72, Type: "BiddableCampaignCriterion", CampaignId: 1,
             Criterion: { Type: "ProfileCriterion", ProfileId: 601, ProfileType: "JobFunction" },
@@ -70,8 +70,8 @@ describe("planProfileBid", () => {
       ],
     });
     expect(plan.requests.map(r => [r.method, (r.body as any).CriterionType, (r.body as any).CampaignCriterions[0].Type])).toEqual([
-      ["POST", "Industry", "BiddableCampaignCriterion"],
-      ["POST", "JobFunction", "NegativeCampaignCriterion"],
+      ["POST", "Targets", "BiddableCampaignCriterion"],
+      ["POST", "Targets", "NegativeCampaignCriterion"],
     ]);
     expect((plan.requests[1].body as any).CampaignCriterions[0].CriterionBid).toBeUndefined();
     expect(plan.requests.some(r => (r.method as string) === "DELETE")).toBe(false);
@@ -101,7 +101,7 @@ describe("planProfileBid", () => {
     expect(() => planProfileBid(state(), { campaign_id: "1", profils: [{ profile_type: "Industry", profile_id: "999", bid_multiplier: 10 }] })).toThrow(/published Industry list/);
     const plan = planProfileBid(state(), { campaign_id: "1", profils: [{ profile_type: "CompanyName", profile_id: "777", bid_multiplier: 50 }] });
     expect(plan.warnings.join(" ")).toMatch(/CompanyName ids are not verified/);
-    expect((plan.requests[0].body as any).CriterionType).toBe("CompanyName");
+    expect((plan.requests[0].body as any).CriterionType).toBe("Targets");
   });
 
   it("rejects malformed requests before anything is sent", () => {

@@ -184,7 +184,9 @@ export function planProfileBid(
     for (const type of PROFILE_TYPES) {
       const bodies = list.filter(x => x.type === type).map(x => x.body);
       for (const part of chunk(bodies, MAX_CRITERIONS_PER_CALL)) {
-        requests.push({ path: "/CampaignCriterions", method, body: { CampaignCriterions: part, CriterionType: type } });
+        // Writes take CriterionType "Targets" for profile criteria (probed live: "Industry",
+        // "JobFunction" or "CompanyName" return CampaignCriterionTypeInvalid), reads take one profile type per call.
+        requests.push({ path: "/CampaignCriterions", method, body: { CampaignCriterions: part, CriterionType: "Targets" } });
       }
     }
   }

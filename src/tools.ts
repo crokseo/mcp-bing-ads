@@ -515,4 +515,33 @@ export const tools: Tool[] = [
       required: ["niveau","campaign_id","audience_id","mode"],
     },
   },
+  {
+    name: "bing_ads_set_profile_bid",
+    description: "Set LinkedIn profile bid adjustments (Industry, JobFunction, CompanyName) on a campaign, -90 to 900, or exclude a profile. BID ONLY: Microsoft never restricts delivery to these profiles. Existing adjustments are updated, absent ones added; nothing is deleted, and switching a criterion between adjustment and exclusion is refused. Industry and JobFunction ids are checked against Microsoft's published lists; company ids cannot be (not downloadable): find them in the interface. Dry run by default: returns before/after, diff, warnings and restore_args (arguments that undo the change); confirm=true applies it after writing a snapshot, then re-reads to verify.",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The Bing Ads account ID (required with confirm=true)" },
+        confirm: { type: "boolean", description: "false (default) = dry run, read-only. true = apply; needs BING_ADS_MCP_WRITE=true, account_id and snapshot_path" },
+        snapshot_path: { type: "string", description: "Absolute path of a new .json file where the current state and restore_args are saved before any change (required with confirm=true)" },
+        campaign_id: { type: "string" },
+        profils: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              profile_type: { type: "string", enum: ["Industry", "JobFunction", "CompanyName"] },
+              profile_id: { type: "string", description: "Microsoft profile id (GetProfileDataFileUrl for Industry/JobFunction)" },
+              bid_multiplier: { type: "number", description: "-90 to 900; omit with exclure" },
+              exclure: { type: "boolean", description: "true = exclude this profile (negative criterion)" },
+            },
+            required: ["profile_type", "profile_id"],
+          },
+        },
+      },
+      required: ["campaign_id", "profils"],
+    },
+  },
 ];

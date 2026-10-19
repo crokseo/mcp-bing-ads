@@ -37,6 +37,7 @@ import {
   planCampaignStatus,
   planConversionGoal,
 } from "./auditWrites.js";
+import { PROFILE_TYPES, ProfileType, planProfileBid } from "./profileWrites.js";
 
 export interface ApiRequest {
   path: string;
@@ -308,6 +309,43 @@ Object.assign(TYPED_WRITES, {
       };
     },
     plan: (state: any, args: any) => planAddAudienceCriterion(state, args),
+  },
+} as Record<string, TypedWriteDef>);
+
+/**
+ * Profile ids Microsoft publishes for a type, from GetProfileDataFileUrl (a CSV
+ * whose first column is the id). Companies are not downloadable: the API
+ * answers InvalidProfileType for CompanyName (probed 2026-10-19), so null.
+ */
+async function publishedProfileIds(call: ApiCall, type: ProfileType): Promise<ReadonlySet<string> | null> {
+  if (type === "CompanyName") return null;
+  try {
+    const r = await call({ path: "/ProfileDataFileUrl/Query", method: "POST", body: { LanguageLocale: "fr", ProfileType: type } });
+    if (!r?.FileUrl) return null;
+    const resp = await fetch(r.FileUrl, { signal: AbortSignal.timeout(30_000) });
+    if (!resp.ok) return null;
+    const lines = (await resp.text()).split("\n").map(l => l.replace("\r", ""));
+    const ids = lines.slice(1).map(l => l.split(",")[0].trim()).filter(Boolean);
+    return ids.length ? new Set(ids) : null;
+  } catch {
+    return null;
+  }
+}
+
+Object.assign(TYPED_WRITES, {
+  bing_ads_set_profile_bid: {
+    async read(call: ApiCall, args: any, accountId: string) {
+      const types = [...new Set((args.profils || []).map((p: any) => p?.profile_type))]
+        .filter((t): t is ProfileType => (PROFILE_TYPES as readonly string[]).includes(t as string));
+      const existing: RawCampaignCriterion[] = [];
+      const known: Partial<Record<ProfileType, ReadonlySet<string> | null>> = {};
+      for (const t of types) {
+        existing.push(...await campaignCriterions(call, args.campaign_id, t));
+        known[t] = await publishedProfileIds(call, t);
+      }
+      return { accountId, existing, known };
+    },
+    plan: (state: any, args: any) => planProfileBid(state, args),
   },
 } as Record<string, TypedWriteDef>);
 

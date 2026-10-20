@@ -544,4 +544,21 @@ export const tools: Tool[] = [
       required: ["campaign_id", "profils"],
     },
   },
+  {
+    name: "bing_ads_add_customer_list_emails",
+    description: "Add e-mail addresses to an existing Customer Match list (CustomerList). ADD ONLY: never removes or replaces members. The addresses are read from a local file (one per line, plain or already SHA-256) and hashed by the tool, so they never appear in the arguments. Sent in batches of 1000. List sizes refresh with a delay of up to 48 h. Dry run by default: returns the counts (unique, invalid, duplicates, calls); confirm=true uploads after writing a snapshot, then checks the list still exists.",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The Bing Ads account ID (required with confirm=true)" },
+        confirm: { type: "boolean", description: "false (default) = dry run, read-only. true = apply; needs BING_ADS_MCP_WRITE=true, account_id and snapshot_path" },
+        snapshot_path: { type: "string", description: "Absolute path of a new .json file where the current state is saved before any change (required with confirm=true)" },
+        audience_id: { type: "string", description: "Id of the customer list (Audience of type CustomerList)" },
+        fichier_emails: { type: "string", description: "Absolute path of the local file of e-mail addresses" },
+        accepter_conditions: { type: "boolean", description: "true = accept the Customer Match terms with this upload (AcceptCustomerMatchTerm)" },
+      },
+      required: ["audience_id", "fichier_emails"],
+    },
+  },
 ];

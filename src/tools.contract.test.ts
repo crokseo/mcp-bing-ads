@@ -32,6 +32,7 @@ const EXPECTED_TOOL_NAMES = [
   "bing_ads_set_audience_network_bid",
   "bing_ads_add_audience_criterion",
   "bing_ads_set_profile_bid",
+  "bing_ads_add_customer_list_emails",
 ];
 
 describe("Bing Ads MCP tools contract", () => {

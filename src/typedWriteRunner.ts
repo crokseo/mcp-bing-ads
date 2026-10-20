@@ -38,6 +38,8 @@ import {
   planConversionGoal,
 } from "./auditWrites.js";
 import { PROFILE_TYPES, ProfileType, planProfileBid } from "./profileWrites.js";
+import { readFileSync } from "fs";
+import { parseEmailFile, planCustomerListAdd } from "./customerListWrites.js";
 
 export interface ApiRequest {
   path: string;
@@ -349,6 +351,31 @@ Object.assign(TYPED_WRITES, {
   },
 } as Record<string, TypedWriteDef>);
 
+Object.assign(TYPED_WRITES, {
+  bing_ads_add_customer_list_emails: {
+    async read(call: ApiCall, args: any) {
+      if (!args.fichier_emails || !isAbsolute(String(args.fichier_emails))) {
+        throw new Error("fichier_emails must be the absolute path of a local file, one address per line.");
+      }
+      const r = await call({ path: "/Audiences/QueryByIds", method: "POST", body: { AudienceIds: [Number(args.audience_id)], Type: "CustomerList" } });
+      const a = (r?.Audiences || []).find((x: any) => x && String(x.Id) === String(Number(args.audience_id)));
+      return {
+        audience: a ? { Id: String(a.Id), Name: a.Name, Type: a.Type, SearchSize: a.SearchSize, AudienceNetworkSize: a.AudienceNetworkSize } : null,
+        parsed: parseEmailFile(readFileSync(String(args.fichier_emails), "utf-8")),
+      };
+    },
+    plan: (state: any, args: any) => planCustomerListAdd(state, args),
+    // Members cannot be read back and sizes refresh with a delay: re-planning
+    // would always propose the same Add, so check only that the list is intact.
+    verify: (before: any, after: any) => ({
+      ok: !!after.audience,
+      detail: after.audience
+        ? { size_before: before.audience?.SearchSize, size_now: after.audience.SearchSize, note: "sizes refresh within 48 h" }
+        : "customer list not found after the upload",
+    }),
+  },
+} as Record<string, TypedWriteDef>);
+
 export const TYPED_WRITE_TOOLS: ReadonlySet<string> = new Set(Object.keys(TYPED_WRITES));
 
 export interface RunDeps {
@@ -400,7 +427,7 @@ export async function runTypedWrite(name: string, rawArgs: Record<string, any>, 
     return {
       mode: "dry_run",
       ...summary,
-      planned_requests: plan.requests,
+      planned_requests: (plan as any).preview_requests ?? plan.requests,
       next_step: plan.requests.length === 0
         ? "Nothing to change: the account already matches."
         : "Show the diff to the user; after an explicit go, call again with confirm: true, account_id and snapshot_path.",
@@ -414,7 +441,7 @@ export async function runTypedWrite(name: string, rawArgs: Record<string, any>, 
     args,
     before: plan.before,
     restore_args: plan.restore_args,
-    planned_requests: plan.requests,
+    planned_requests: (plan as any).preview_requests ?? plan.requests,
   }, null, 2));
 
   const executed: Array<{ request: MutationRequest; response: unknown }> = [];
